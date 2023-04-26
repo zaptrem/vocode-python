@@ -1,16 +1,43 @@
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Generator, List, Any
+from queue import Queue
+import threading
 
-
+from langchain import OpenAI
 from langchain.llms import GPT4All
-from typing import Generator
+from langchain.llms.base import LLM
 import logging
 from vocode import getenv
 
 from vocode.streaming.agent.base_agent import BaseAgent
 from vocode.streaming.agent.utils import stream_llm_response
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from vocode.streaming.models.agent import LLMAgentConfig
 
+class FancyDict(dict):
+    def to_dict(self):
+        return self
+def stream(model, *args, **kwargs):
+    # Create a queue to store the tokens
+    q = Queue()
+    
+    # Define a custom callback handler that puts tokens into the queue
+    class QueueCallbackHandler(StreamingStdOutCallbackHandler):
+        def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
+            print("<START>" + token + "<END>")
+            q.put(token)
+    
+    # Create a callback manager with the custom handler
+    callback_manager = QueueCallbackHandler()
+    model.callback_manager = callback_manager
+    
+    # Run the model in a separate thread with the callback manager
+    t = threading.Thread(target=model, args=args, kwargs=kwargs)
+    t.start()
+    
+    # Yield tokens from the queue until the thread is done
+    while t.is_alive() or not q.empty():
+        yield FancyDict({"choices": [{"text": q.get(), "finish_reason": None}]})
 
 class LLMAgent(BaseAgent):
     SENTENCE_ENDINGS = [".", "!", "?"]
@@ -19,6 +46,7 @@ class LLMAgent(BaseAgent):
 
     def __init__(
         self,
+        llm: LLM,
         agent_config: LLMAgentConfig,
         logger: logging.Logger = None,
         sender="AI",
@@ -40,13 +68,7 @@ class LLMAgent(BaseAgent):
             if agent_config.initial_message
             else []
         )
-        self.llm = GPT4All(
-            #temperature=self.agent_config.temperature,
-            #max_tokens=self.agent_config.max_tokens,
-            n_ctx=512, 
-            n_threads=8,
-            model="/Users/ajayraj/src/gpt4all/gpt4all-lora-quantized-converted.bin",
-        )
+        self.llm = llm
         self.stop_tokens = [f"{recipient}:"]
         self.first_response = (
             self.llm(
@@ -113,7 +135,7 @@ class LLMAgent(BaseAgent):
             sentences = stream_llm_response(
                 map(
                     lambda resp: resp.to_dict(),
-                    self.llm.stream(prompt, stop=self.stop_tokens),
+                    stream(self.llm, prompt, stop=self.stop_tokens),
                 )
             )
         response_buffer = ""
@@ -133,7 +155,13 @@ class LLMAgent(BaseAgent):
 
 
 if __name__ == "__main__":
-    chat_responder = LLMAgent(
+    chat_responder = LLMAgent(GPT4All(
+            #temperature=self.agent_config.temperature,
+            #max_tokens=self.agent_config.max_tokens,
+            n_ctx=512, 
+            n_threads=8,
+            model="/Users/zaptrem/dalai/llama/models/7B/gpt4all-lora-q-converted.bin",
+        ),
         LLMAgentConfig(
             prompt_preamble="""
 The AI is having a pleasant conversation about life.
