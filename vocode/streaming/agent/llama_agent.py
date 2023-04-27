@@ -24,7 +24,6 @@ def stream(model, *args, **kwargs):
     # Define a custom callback handler that puts tokens into the queue
     class QueueCallbackHandler(StreamingStdOutCallbackHandler):
         def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
-            print("<START>" + token + "<END>")
             q.put(token)
     
     # Create a callback manager with the custom handler
@@ -136,7 +135,7 @@ class LLMAgent(BaseAgent):
                 map(
                     lambda resp: resp.to_dict(),
                     stream(self.llm, prompt, stop=self.stop_tokens),
-                )
+                ), ignore_prompt_length=len(prompt)
             )
         response_buffer = ""
         for sentence in sentences:
@@ -165,10 +164,7 @@ if __name__ == "__main__":
         LLMAgentConfig(
             prompt_preamble="""
 The AI is having a pleasant conversation about life.
-
-{history}
-Human: {human_input}
-AI:""",
+""",
         )
     )
     while True:
